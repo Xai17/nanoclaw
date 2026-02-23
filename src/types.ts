@@ -39,6 +39,7 @@ export interface RegisteredGroup {
   added_at: string;
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
+  elevated?: boolean; // If true, gets full project mount like main
 }
 
 export interface NewMessage {

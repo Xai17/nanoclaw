@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, SESSION_MAX_AGE, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.js';
@@ -97,6 +97,20 @@ function createSchema(database: Database.Database): void {
     database.prepare(
       `UPDATE messages SET is_bot_message = 1 WHERE content LIKE ?`,
     ).run(`${ASSISTANT_NAME}:%`);
+  } catch {
+    /* column already exists */
+  }
+
+  // Add updated_at column to sessions if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN updated_at TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
+  // Add elevated column to registered_groups if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN elevated INTEGER DEFAULT 0`);
   } catch {
     /* column already exists */
   }
@@ -490,14 +504,20 @@ export function getSession(groupFolder: string): string | undefined {
 
 export function setSession(groupFolder: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
+    `INSERT OR REPLACE INTO sessions (group_folder, session_id, updated_at)
+     VALUES (?, ?, datetime('now'))`,
   ).run(groupFolder, sessionId);
 }
 
 export function getAllSessions(): Record<string, string> {
+  // Only return sessions updated within SESSION_MAX_AGE to avoid loading huge history
+  const maxAgeSeconds = Math.floor(SESSION_MAX_AGE / 1000);
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+    .prepare(
+      `SELECT group_folder, session_id FROM sessions
+       WHERE updated_at IS NULL OR updated_at > datetime('now', ? || ' seconds')`,
+    )
+    .all(`-${maxAgeSeconds}`) as Array<{ group_folder: string; session_id: string }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.group_folder] = row.session_id;
@@ -552,8 +572,8 @@ export function setRegisteredGroup(
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, elevated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -562,6 +582,7 @@ export function setRegisteredGroup(
     group.added_at,
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
+    group.elevated ? 1 : 0,
   );
 }
 
@@ -576,6 +597,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     added_at: string;
     container_config: string | null;
     requires_trigger: number | null;
+    elevated: number | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -595,6 +617,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
         ? JSON.parse(row.container_config)
         : undefined,
       requiresTrigger: row.requires_trigger === null ? undefined : row.requires_trigger === 1,
+      elevated: row.elevated === 1,
     };
   }
   return result;

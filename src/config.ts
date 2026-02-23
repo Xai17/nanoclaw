@@ -1,4 +1,3 @@
-import os from 'os';
 import path from 'path';
 
 import { readEnvFile } from './env.js';
@@ -9,6 +8,10 @@ import { readEnvFile } from './env.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_ONLY',
+  'DISCORD_BOT_TOKEN',
+  'DISCORD_ONLY',
 ]);
 
 export const ASSISTANT_NAME =
@@ -20,7 +23,7 @@ export const SCHEDULER_POLL_INTERVAL = 60000;
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
-const HOME_DIR = process.env.HOME || os.homedir();
+const HOME_DIR = process.env.HOME || '/Users/user';
 
 // Mount security: allowlist stored OUTSIDE project root, never mounted into containers
 export const MOUNT_ALLOWLIST_PATH = path.join(
@@ -49,6 +52,10 @@ export const IDLE_TIMEOUT = parseInt(
   process.env.IDLE_TIMEOUT || '1800000',
   10,
 ); // 30min default — how long to keep container alive after last result
+export const SESSION_MAX_AGE = parseInt(
+  process.env.SESSION_MAX_AGE || String(4 * 60 * 60 * 1000),
+  10,
+); // 4h default — sessions older than this start fresh to avoid loading huge history
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
@@ -67,3 +74,15 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Telegram configuration
+export const TELEGRAM_BOT_TOKEN =
+  process.env.TELEGRAM_BOT_TOKEN || envConfig.TELEGRAM_BOT_TOKEN || '';
+export const TELEGRAM_ONLY =
+  (process.env.TELEGRAM_ONLY || envConfig.TELEGRAM_ONLY) === 'true';
+
+// Discord configuration
+export const DISCORD_BOT_TOKEN =
+  process.env.DISCORD_BOT_TOKEN || envConfig.DISCORD_BOT_TOKEN || '';
+export const DISCORD_ONLY =
+  (process.env.DISCORD_ONLY || envConfig.DISCORD_ONLY) === 'true';
