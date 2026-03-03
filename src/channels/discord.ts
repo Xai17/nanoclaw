@@ -33,10 +33,27 @@ export class DiscordChannel implements Channel {
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
   private botToken: string;
+  private channelCache = new Map<string, TextChannel>();
 
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  private async fetchChannel(channelId: string): Promise<TextChannel | null> {
+    const cached = this.channelCache.get(channelId);
+    if (cached) return cached;
+    if (!this.client) return null;
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (channel && 'send' in channel) {
+        this.channelCache.set(channelId, channel as TextChannel);
+        return channel as TextChannel;
+      }
+    } catch (err) {
+      logger.debug({ channelId, err }, 'Failed to fetch Discord channel');
+    }
+    return null;
   }
 
   async connect(): Promise<void> {
@@ -130,6 +147,11 @@ export class DiscordChannel implements Channel {
         }
       }
 
+      // Pre-warm channel cache for fast replies
+      if (!this.channelCache.has(channelId) && 'send' in message.channel) {
+        this.channelCache.set(channelId, message.channel as TextChannel);
+      }
+
       // Store chat metadata for discovery
       const isGroup = message.guild !== null;
       this.opts.onChatMetadata(
@@ -191,14 +213,12 @@ export class DiscordChannel implements Channel {
 
     try {
       const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
-
-      if (!channel || !('send' in channel)) {
+      const textChannel = await this.fetchChannel(channelId);
+      if (!textChannel) {
         logger.warn({ jid }, 'Discord channel not found or not text-based');
         return;
       }
 
-      const textChannel = channel as TextChannel;
       const MAX_LENGTH = 2000;
       if (text.length <= MAX_LENGTH) {
         await textChannel.send(text);
@@ -233,10 +253,8 @@ export class DiscordChannel implements Channel {
     if (!this.client || !isTyping) return;
     try {
       const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
-      if (channel && 'sendTyping' in channel) {
-        await (channel as TextChannel).sendTyping();
-      }
+      const textChannel = await this.fetchChannel(channelId);
+      if (textChannel) await textChannel.sendTyping();
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
     }

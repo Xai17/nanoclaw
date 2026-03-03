@@ -467,7 +467,11 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (_chatJid: string, msg: NewMessage) => storeMessage(msg),
+    onMessage: (chatJid: string, msg: NewMessage) => {
+      storeMessage(msg);
+      // Wake up the message loop immediately instead of waiting for next poll
+      queue.enqueueMessageCheck(chatJid);
+    },
     onChatMetadata: (
       chatJid: string,
       timestamp: string,
