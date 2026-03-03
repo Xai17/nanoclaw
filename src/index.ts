@@ -4,12 +4,16 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
-  MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
-import { DiscordChannel, channelIdToJid } from './channels/discord.js';
+import './channels/index.js';
+import { channelIdToJid } from './channels/discord.js';
 import { readEnvFile } from './env.js';
+import {
+  getChannelFactory,
+  getRegisteredChannelNames,
+} from './channels/registry.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -52,7 +56,6 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-let discord: DiscordChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -141,7 +144,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
-  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+  const isMainGroup = group.isMain === true;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(
@@ -251,7 +254,7 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
-  const isMain = group.folder === MAIN_GROUP_FOLDER;
+  const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
@@ -372,7 +375,7 @@ async function startMessageLoop(): Promise<void> {
             continue;
           }
 
-          const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+          const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -475,28 +478,37 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
-  // Create and connect channels
-  const discordEnv = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID']);
-  const discordToken =
-    process.env.DISCORD_BOT_TOKEN || discordEnv.DISCORD_BOT_TOKEN;
-  if (!discordToken) {
-    logger.fatal('DISCORD_BOT_TOKEN is not set in .env');
+  // Create and connect all registered channels.
+  // Each channel self-registers via the barrel import above.
+  // Factories return null when credentials are missing, so unconfigured channels are skipped.
+  for (const channelName of getRegisteredChannelNames()) {
+    const factory = getChannelFactory(channelName)!;
+    const channel = factory(channelOpts);
+    if (!channel) {
+      logger.warn(
+        { channel: channelName },
+        'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
+      );
+      continue;
+    }
+    channels.push(channel);
+    await channel.connect();
+  }
+  if (channels.length === 0) {
+    logger.fatal('No channels connected');
     process.exit(1);
   }
-  const discordChannelId =
-    process.env.DISCORD_CHANNEL_ID || discordEnv.DISCORD_CHANNEL_ID;
-
-  discord = new DiscordChannel({ ...channelOpts, token: discordToken });
-  channels.push(discord);
-  await discord.connect();
 
   // Auto-register the Discord channel if DISCORD_CHANNEL_ID is set and not yet registered
+  const discordEnv = readEnvFile(['DISCORD_CHANNEL_ID']);
+  const discordChannelId =
+    process.env.DISCORD_CHANNEL_ID || discordEnv.DISCORD_CHANNEL_ID;
   if (discordChannelId) {
     const jid = channelIdToJid(discordChannelId);
     if (!registeredGroups[jid]) {
       registerGroup(jid, {
         name: 'main',
-        folder: MAIN_GROUP_FOLDER,
+        folder: 'main',
         trigger: `@${ASSISTANT_NAME}`,
         added_at: new Date().toISOString(),
         requiresTrigger: false,
@@ -530,7 +542,13 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
-    syncGroupMetadata: (_force) => Promise.resolve(),
+    syncGroups: async (force: boolean) => {
+      await Promise.all(
+        channels
+          .filter((ch) => ch.syncGroups)
+          .map((ch) => ch.syncGroups!(force)),
+      );
+    },
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
