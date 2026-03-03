@@ -7,7 +7,12 @@ import {
 } from 'discord.js';
 
 import { logger } from '../logger.js';
-import { Channel, OnChatMetadata, OnInboundMessage, RegisteredGroup } from '../types.js';
+import {
+  Channel,
+  OnChatMetadata,
+  OnInboundMessage,
+  RegisteredGroup,
+} from '../types.js';
 
 const DISCORD_JID_PREFIX = 'discord:';
 

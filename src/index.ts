@@ -477,12 +477,14 @@ async function main(): Promise<void> {
 
   // Create and connect channels
   const discordEnv = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID']);
-  const discordToken = process.env.DISCORD_BOT_TOKEN || discordEnv.DISCORD_BOT_TOKEN;
+  const discordToken =
+    process.env.DISCORD_BOT_TOKEN || discordEnv.DISCORD_BOT_TOKEN;
   if (!discordToken) {
     logger.fatal('DISCORD_BOT_TOKEN is not set in .env');
     process.exit(1);
   }
-  const discordChannelId = process.env.DISCORD_CHANNEL_ID || discordEnv.DISCORD_CHANNEL_ID;
+  const discordChannelId =
+    process.env.DISCORD_CHANNEL_ID || discordEnv.DISCORD_CHANNEL_ID;
 
   discord = new DiscordChannel({ ...channelOpts, token: discordToken });
   channels.push(discord);
