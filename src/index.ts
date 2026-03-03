@@ -8,7 +8,8 @@ import {
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
-import { WhatsAppChannel } from './channels/whatsapp.js';
+import { DiscordChannel, channelIdToJid } from './channels/discord.js';
+import { readEnvFile } from './env.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -51,7 +52,7 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-let whatsapp: WhatsAppChannel;
+let discord: DiscordChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -475,9 +476,32 @@ async function main(): Promise<void> {
   };
 
   // Create and connect channels
-  whatsapp = new WhatsAppChannel(channelOpts);
-  channels.push(whatsapp);
-  await whatsapp.connect();
+  const discordEnv = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID']);
+  const discordToken = process.env.DISCORD_BOT_TOKEN || discordEnv.DISCORD_BOT_TOKEN;
+  if (!discordToken) {
+    logger.fatal('DISCORD_BOT_TOKEN is not set in .env');
+    process.exit(1);
+  }
+  const discordChannelId = process.env.DISCORD_CHANNEL_ID || discordEnv.DISCORD_CHANNEL_ID;
+
+  discord = new DiscordChannel({ ...channelOpts, token: discordToken });
+  channels.push(discord);
+  await discord.connect();
+
+  // Auto-register the Discord channel if DISCORD_CHANNEL_ID is set and not yet registered
+  if (discordChannelId) {
+    const jid = channelIdToJid(discordChannelId);
+    if (!registeredGroups[jid]) {
+      registerGroup(jid, {
+        name: 'main',
+        folder: MAIN_GROUP_FOLDER,
+        trigger: `@${ASSISTANT_NAME}`,
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+      });
+      loadState();
+    }
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -504,8 +528,7 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
-    syncGroupMetadata: (force) =>
-      whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
+    syncGroupMetadata: (_force) => Promise.resolve(),
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
